@@ -113,7 +113,7 @@
 <script>
 (function () {
   'use strict';
-  var VERSION = '1.0.0';
+  var VERSION = '1.0.1';
 
   function load(k, d) { try { var v = JSON.parse(localStorage.getItem(k)); return v || d; } catch (e) { return d; } }
   function store(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
@@ -229,12 +229,9 @@
       }
       var ctl = new AbortController();
       var timer = setTimeout(function () { ctl.abort(); }, 45000);
-      fetch(CFG.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(Object.assign({ token: CFG.token }, body)),
-        signal: ctl.signal
-      }).then(function (r) { return r.text(); }).then(function (txt) {
+      var payload = JSON.stringify(Object.assign({ token: CFG.token }, body));
+      var url = CFG.url + (CFG.url.indexOf('?') < 0 ? '?' : '&') + 'd=' + encodeURIComponent(payload);
+      fetch(url, { cache: 'no-store', signal: ctl.signal }).then(function (r) { return r.text(); }).then(function (txt) {
         clearTimeout(timer);
         var j;
         try { j = JSON.parse(txt); } catch (e) {
@@ -242,9 +239,12 @@
         }
         if (j && j.ok) resolve(j.data);
         else reject(Object.assign(new Error((j && j.error) || 'Fehler'), { server: true, code: j && j.code }));
-      }, function () {
+      }, function (err) {
         clearTimeout(timer);
-        reject(Object.assign(new Error('Keine Verbindung'), { network: true }));
+        reject(Object.assign(new Error('Keine Verbindung'), {
+          network: true,
+          detail: String((err && (err.name + ': ' + err.message)) || err)
+        }));
       });
     });
   }
@@ -274,7 +274,7 @@
       if (e.server) { serverError(e); }
       else { offline = true; }
       if (!S) S = load('zv-state', null);
-      if (!S && !e.server) msg('Keine Verbindung und noch keine Daten gespeichert.', 'bad');
+      if (!S && !e.server) msg('Keine Verbindung und noch keine Daten gespeichert. Technisch: ' + (e.detail || '?'), 'bad');
     }
     if (S) { applyQueue(); initMonth(); render(); }
     banner();
