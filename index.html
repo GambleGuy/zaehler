@@ -113,7 +113,7 @@
 <script>
 (function () {
   'use strict';
-  var VERSION = '1.0.1';
+  var VERSION = '1.0.2';
 
   function load(k, d) { try { var v = JSON.parse(localStorage.getItem(k)); return v || d; } catch (e) { return d; } }
   function store(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
@@ -222,29 +222,57 @@
   }
 
   // ---------- Verbindung zum Script ----------
+  // Rückfallebene: Antwort über ein Script-Tag laden (unterliegt nicht der Cross-Origin-Prüfung)
+  function jsonp(url, ms) {
+    return new Promise(function (resolve, reject) {
+      var cb = 'zv_cb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+      var s = document.createElement('script'), done = false, t;
+      function cleanup() {
+        done = true; clearTimeout(t);
+        try { delete window[cb]; } catch (e) { window[cb] = undefined; }
+        if (s.parentNode) s.parentNode.removeChild(s);
+      }
+      t = setTimeout(function () { if (done) return; cleanup(); reject(new Error('Zeitüberschreitung')); }, ms);
+      window[cb] = function (j) { if (done) return; cleanup(); resolve(j); };
+      s.onerror = function () { if (done) return; cleanup(); reject(new Error('Script nicht ladbar')); };
+      s.src = url + '&callback=' + cb + '&t=' + Date.now();
+      document.head.appendChild(s);
+    });
+  }
+
   function api(body) {
     return new Promise(function (resolve, reject) {
       if (!CFG.url || !CFG.token) {
         return reject(Object.assign(new Error('Bitte Script-URL und Schlüssel eintragen.'), { server: true, code: 'config' }));
       }
+      var base = CFG.url + (CFG.url.indexOf('?') < 0 ? '?' : '&') + 'd=' +
+        encodeURIComponent(JSON.stringify(Object.assign({ token: CFG.token }, body)));
+
+      function finish(j) {
+        if (j && j.ok) resolve(j.data);
+        else reject(Object.assign(new Error((j && j.error) || 'Fehler'), { server: true, code: j && j.code }));
+      }
+      function viaScriptTag(firstErr) {
+        jsonp(base, 30000).then(finish, function (err) {
+          reject(Object.assign(new Error('Keine Verbindung'), {
+            network: true,
+            detail: firstErr + ' / ' + String((err && err.message) || err)
+          }));
+        });
+      }
+
       var ctl = new AbortController();
-      var timer = setTimeout(function () { ctl.abort(); }, 45000);
-      var payload = JSON.stringify(Object.assign({ token: CFG.token }, body));
-      var url = CFG.url + (CFG.url.indexOf('?') < 0 ? '?' : '&') + 'd=' + encodeURIComponent(payload);
-      fetch(url, { cache: 'no-store', signal: ctl.signal }).then(function (r) { return r.text(); }).then(function (txt) {
+      var timer = setTimeout(function () { ctl.abort(); }, 20000);
+      fetch(base, { cache: 'no-store', signal: ctl.signal }).then(function (r) { return r.text(); }).then(function (txt) {
         clearTimeout(timer);
         var j;
         try { j = JSON.parse(txt); } catch (e) {
           return reject(Object.assign(new Error('Unerwartete Antwort vom Script. Zugriff auf „Jeder" gestellt und neue Version veröffentlicht?'), { server: true, code: 'bad' }));
         }
-        if (j && j.ok) resolve(j.data);
-        else reject(Object.assign(new Error((j && j.error) || 'Fehler'), { server: true, code: j && j.code }));
+        finish(j);
       }, function (err) {
         clearTimeout(timer);
-        reject(Object.assign(new Error('Keine Verbindung'), {
-          network: true,
-          detail: String((err && (err.name + ': ' + err.message)) || err)
-        }));
+        viaScriptTag(String((err && (err.name + ': ' + err.message)) || err));
       });
     });
   }
